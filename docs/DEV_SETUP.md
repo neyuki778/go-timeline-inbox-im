@@ -34,11 +34,13 @@ docker exec -it go-im-redis redis-cli ping
 
 ### 连接信息
 
-| 服务 | Host | Port | 用户名 | 密码 |
-|------|------|------|--------|------|
-| MySQL | localhost | 3306 | im_user | im_pass123 |
-| MySQL (root) | localhost | 3306 | root | root123 |
-| Redis | localhost | 6379 | - | - |
+| 服务 | Host | Port | 用户名 | 密码 | 备注 |
+|------|------|------|--------|------|------|
+| MySQL | localhost | 3306 | im_user | im_pass123 | |
+| MySQL (root) | localhost | 3306 | root | root123 | |
+| Redis | localhost | 6379 | - | - | |
+| RabbitMQ | localhost | 5672 | im_user | im_pass123 | AMQP 协议 |
+| RabbitMQ 管理界面 | localhost | 15672 | im_user | im_pass123 | Web UI |
 
 ### Go 应用配置示例
 
@@ -50,6 +52,9 @@ type Config struct {
     }
     Redis struct {
         Addr string `default:"localhost:6379"`
+    }
+    RabbitMQ struct {
+        URL string `default:"amqp://im_user:im_pass123@localhost:5672/"`
     }
 }
 ```
@@ -77,12 +82,19 @@ docker exec -it go-im-redis redis-cli
 
 Redis 已包含在 docker-compose.yml 中，默认启动。
 
-## 阶段三：启用 Kafka
+## 阶段三：启用 RabbitMQ
 
-编辑 `docker-compose.yml`，取消 zookeeper 和 kafka 的注释，然后：
+编辑 `docker-compose.yml`，取消 rabbitmq 相关的注释（包括 volumes 中的 `rabbitmq_data`），然后：
 
 ```bash
 docker-compose up -d
+
+# 验证 RabbitMQ
+docker exec -it go-im-rabbitmq rabbitmq-diagnostics check_running
+
+# 访问管理界面
+open http://localhost:15672
+# 用户名/密码: im_user / im_pass123
 ```
 
 ## 常见问题
