@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"reflect"
 
 	"go-im/internal/model"
 )
@@ -33,6 +34,10 @@ func (s *PushService) Broadcast(ctx context.Context, packet model.OutputPacket, 
 		conn := s.conns.Get(target)
 		if conn == nil {
 			continue // 连接不存在，跳过
+		}
+		// 处理“带类型的 nil”场景（接口非 nil，但底层指针为 nil）
+		if rv := reflect.ValueOf(conn); rv.Kind() == reflect.Ptr && rv.IsNil() {
+			continue
 		}
 		curErr := conn.WriteJSON(packet)
 		if curErr != nil && err == nil {
