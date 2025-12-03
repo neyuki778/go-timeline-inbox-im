@@ -37,36 +37,46 @@ type ChatPayload struct {
 func (s *MessageService) HandleChat(ctx context.Context, userID string, packet model.InputPacket, payload ChatPayload) (model.OutputPacket, error) {
 	// TODO: 生成 msg_id（若缺省）、填充默认 msg_type，调用仓储写库并处理幂等/错误，返回 seq
 	msg_id := packet.MsgId
-	if msg_id == ""{
+	if msg_id == "" {
 		msg_id = uuid.NewString()
 	}
-	if payload.MsgType == 0{
+	if payload.MsgType == 0 {
 		payload.MsgType = 1
 	}
 
 	msg := &model.TimelineMessage{
-		MsgID: msg_id,
+		MsgID:          msg_id,
 		ConversationID: packet.ConversationId,
-		SenderID: userID,
-		Content: payload.Content,
-		MsgType: payload.MsgType,
-		Status: 1,
-		SendTime: time.Now().UnixMilli(),
+		SenderID:       userID,
+		Content:        payload.Content,
+		MsgType:        payload.MsgType,
+		Status:         1,
+		SendTime:       time.Now().UnixMilli(),
 	}
 
 	err := s.msgRepo.SaveMessage(ctx, msg)
-	if err != nil{
-		if errors.Is(err, repository.ErrDuplicateMsgID){
+	if err != nil {
+		if errors.Is(err, repository.ErrDuplicateMsgID) {
 			log.Printf("重复消息 msg_id=%s，返回幂等结果", msg_id)
-			return model.OutputPacket{MsgId: msg.MsgID, Seq: int64(msg.Seq)}, err
-		}else{
-			return  model.OutputPacket{Cmd: model.CmdChat, }, err
+			// 幂等场景：查已有记录并返回已有 seq
+			existing, findErr := s.msgRepo.FindByMsgID(ctx, msg_id)
+			if findErr != nil {
+				return model.OutputPacket{Cmd: model.CmdChat, Code: 1, MsgId: msg_id}, findErr
+			}
+			return model.OutputPacket{
+				Cmd:   model.CmdChat,
+				Code:  0,
+				MsgId: msg_id,
+				Seq:   int64(existing.Seq),
+			}, nil
+		} else {
+			return model.OutputPacket{Cmd: model.CmdChat, Code: 1, MsgId: msg_id}, err
 		}
 	}
 	return model.OutputPacket{
-		Cmd: model.CmdChat,
-		Code: 0,
+		Cmd:   model.CmdChat,
+		Code:  0,
 		MsgId: msg_id,
-		Seq: int64(msg.Seq),
+		Seq:   int64(msg.Seq),
 	}, nil
 }

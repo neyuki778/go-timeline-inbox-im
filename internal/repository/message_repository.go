@@ -30,16 +30,16 @@ func (r *MessageRepository) SaveMessage(ctx context.Context, msg *model.Timeline
 	// TODO: 实现会话内 seq 生成与写库逻辑（幂等判重、事务内自增 seq）
 	// return errors.New("SaveMessage not implemented")
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var max_seq uint64
+		var maxSeq uint64
 		// 查找目前表中最大的seq
 		if err := tx.Raw(
 			"SELECT COALESCE(MAX(seq), 0) FROM timeline_message WHERE conversation_id = ? FOR UPDATE",
 			msg.ConversationID,
-		).Scan(&max_seq).Error; err != nil{
+		).Scan(&maxSeq).Error; err != nil{
 			return err
 		}
 
-		msg.Seq = max_seq + 1
+		msg.Seq = maxSeq + 1
 		if err := tx.Create(msg).Error; err != nil{
 			var mysqlErr *mysql.MySQLError
 			if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062{
