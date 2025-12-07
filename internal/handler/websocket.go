@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"go-im/internal/model"
@@ -24,6 +25,7 @@ const (
 type WebSocketHandler struct {
 	connManager *service.ConnectionManager
 	messageSvc  *service.MessageService
+	producer    *service.MessageProducer
 	upgrader    websocket.Upgrader
 }
 
@@ -37,6 +39,12 @@ func NewWebSocketHandler(connManager *service.ConnectionManager, messageSvc *ser
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 	}
+}
+
+// WithProducer 注入 MQ 生产者，启用“先入队再处理”的路径。
+func (h *WebSocketHandler) WithProducer(producer *service.MessageProducer) *WebSocketHandler {
+	h.producer = producer
+	return h
 }
 
 // HandleWebSocket 提供给 Gin 的路由函数。
@@ -107,25 +115,47 @@ func (h *WebSocketHandler) writeJSON(conn *websocket.Conn, payload interface{}) 
 
 // handleChat 处理聊天消息：解析、写库并返回 seq。
 func (h *WebSocketHandler) handleChat(userID string, packet model.InputPacket, conn *websocket.Conn) error {
-	// TODO: 校验 conversation_id，反序列化 payload 为 ChatPayload，调用 messageSvc.HandleChat，
-	// 将结果写回客户端（注意设置超时与错误处理）
-	// return errors.New("handleChat not implemented")
-	if packet.ConversationId == ""{
-		return h.writeJSON(conn, model.OutputPacket{Cmd : model.CmdChat, Code: 400, MsgId: packet.MsgId, Payload: "ConversationId 不能为空!"})
+	if packet.ConversationId == "" {
+		return h.writeJSON(conn, model.OutputPacket{Cmd: model.CmdChat, Code: 400, MsgId: packet.MsgId, Payload: "ConversationId 不能为空!"})
 	}
 
 	var payload service.ChatPayload
-	if err := json.Unmarshal(packet.Payload, &payload); err != nil{
-		return h.writeJSON(conn, model.OutputPacket{Cmd : model.CmdChat, Code: 400, MsgId: packet.MsgId, Payload: "Payload 解析失败!"})
+	if err := json.Unmarshal(packet.Payload, &payload); err != nil {
+		return h.writeJSON(conn, model.OutputPacket{Cmd: model.CmdChat, Code: 400, MsgId: packet.MsgId, Payload: "Payload 解析失败!"})
 	}
 
-	ctx, cancer := context.WithTimeout(context.Background(), 3 * time.Second)
-	defer cancer()
-	
-	output_packet, err := h.messageSvc.HandleChat(ctx, userID, packet, payload)
-	if err != nil{
-		h.writeJSON(conn, output_packet)
+	// 如果注入了 MQ 生产者，则走“入队”路径立即响应
+	if h.producer != nil {
+		msgID := packet.MsgId
+		if msgID == "" {
+			msgID = uuid.NewString()
+		}
+		event := service.ChatEvent{
+			MsgID:          msgID,
+			ConversationID: packet.ConversationId,
+			SenderID:       userID,
+			Content:        payload.Content,
+			MsgType:        payload.MsgType,
+			SendTime:       payload.SendTime,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		if err := h.producer.PublishChat(ctx, event); err != nil {
+			return h.writeJSON(conn, model.OutputPacket{Cmd: model.CmdChat, Code: 1, MsgId: msgID, Payload: "MQ 发布失败"})
+		}
+		return h.writeJSON(conn, model.OutputPacket{Cmd: model.CmdChat, Code: 0, MsgId: msgID, Payload: "accepted"})
+	}
+
+	// 默认路径：直接落库
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	outputPacket, err := h.messageSvc.HandleChat(ctx, userID, packet, payload)
+	if err != nil {
+		_ = h.writeJSON(conn, outputPacket)
 		return err
 	}
-	return h.writeJSON(conn, output_packet)
+	return h.writeJSON(conn, outputPacket)
 }
