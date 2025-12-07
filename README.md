@@ -30,6 +30,10 @@
 | **ORM** | GORM | v1.25+ |
 | **容器化** | Docker Compose | v3.9+ |
 
+## 📊 系统架构
+
+![架构图](docs/images/架构图.svg)
+
 ## 🏗️ 项目迭代过程
 
 本项目采用**分阶段递进**的开发策略，遵循 "Make it Work → Make it Scale" 的工程哲学。
@@ -134,10 +138,6 @@ go test -bench=HandleChatSeq -benchmem ./internal/service
 - Gateway 接收消息后立即入队，异步处理
 - Worker 消费队列，批量写库
 - 流量突刺场景（群发、营销活动）不阻塞连接
-
-## 📊 系统架构
-
-![架构图](docs/images/架构图.svg)
 
 ### 数据流
 1. **发送消息**：客户端 → WebSocket → 生成 seq（Redis） → 写 MySQL（Timeline） → 写 Inbox（Redis）→ 推送在线用户
