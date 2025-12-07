@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"go-im/internal/model"
@@ -16,6 +17,7 @@ import (
 type MessageService struct {
 	msgRepo MessageSaver
 	seqGen  SeqGenerator // 可选的 seq 生成器（例如 Redis），为 nil 时走仓储默认逻辑
+	inbox   InboxWriter  // 可选的 Inbox 写入器（Redis），为 nil 时不写
 }
 
 // MessageSaver 描述消息持久化需要实现的接口，便于测试替换。
@@ -36,6 +38,12 @@ func NewMessageServiceWithSeq(msgRepo MessageSaver, seqGen SeqGenerator) *Messag
 // WithSeqGenerator 可选注入自定义 seq 生成器。
 func (s *MessageService) WithSeqGenerator(gen SeqGenerator) *MessageService {
 	s.seqGen = gen
+	return s
+}
+
+// WithInbox 可选注入 Inbox 写入器（如 Redis）。
+func (s *MessageService) WithInbox(inbox InboxWriter) *MessageService {
+	s.inbox = inbox
 	return s
 }
 
@@ -68,9 +76,11 @@ func (s *MessageService) HandleChat(ctx context.Context, userID string, packet m
 
 	// 如果有外部 seq 生成器（这里是 Redis），优先获取 seq 后写库
 	if s.seqGen != nil {
-		if seq, seqErr := s.seqGen.NextSeq(ctx, packet.ConversationId); seqErr == nil {
-			msg.Seq = seq
+		seq, seqErr := s.seqGen.NextSeq(ctx, packet.ConversationId)
+		if seqErr != nil {
+			return model.OutputPacket{Cmd: model.CmdChat, Code: 1, MsgId: msg_id, Payload: "generate seq failed"}, seqErr
 		}
+		msg.Seq = seq
 	}
 
 	err := s.msgRepo.SaveMessage(ctx, msg)
@@ -92,10 +102,52 @@ func (s *MessageService) HandleChat(ctx context.Context, userID string, packet m
 			return model.OutputPacket{Cmd: model.CmdChat, Code: 1, MsgId: msg_id}, err
 		}
 	}
+
+	// 写入 Inbox（仅在配置了 Redis 时，假设会话 ID 形如 private_userA_userB）
+	if s.inbox != nil {
+		targets := parsePrivateParticipants(packet.ConversationId, userID)
+		if len(targets) > 0 {
+			if err := s.inbox.Append(ctx, *msg, targets); err != nil {
+				log.Printf("写入 Inbox 失败 conv=%s msg_id=%s: %v", packet.ConversationId, msg_id, err)
+			}
+		}
+	}
+
 	return model.OutputPacket{
 		Cmd:   model.CmdChat,
 		Code:  0,
 		MsgId: msg_id,
 		Seq:   int64(msg.Seq),
 	}, nil
+}
+
+// parsePrivateParticipants 会话 ID 形如 "private_u1_u2"，返回需要投递 Inbox 的用户列表。
+func parsePrivateParticipants(conversationID, senderID string) []string {
+	const prefix = "private_"
+	if !strings.HasPrefix(conversationID, prefix) {
+		return nil
+	}
+	parts := strings.Split(strings.TrimPrefix(conversationID, prefix), "_")
+	if len(parts) < 2 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var users []string
+	for _, uid := range parts {
+		if uid == "" {
+			continue
+		}
+		if _, ok := seen[uid]; ok {
+			continue
+		}
+		seen[uid] = struct{}{}
+		users = append(users, uid)
+	}
+	// 确保包含发送者（以防会话 ID 未包含）
+	if senderID != "" {
+		if _, ok := seen[senderID]; !ok {
+			users = append(users, senderID)
+		}
+	}
+	return users
 }
