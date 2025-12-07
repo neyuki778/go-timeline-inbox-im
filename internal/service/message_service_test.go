@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"go-im/internal/model"
 	"go-im/internal/repository"
@@ -120,9 +119,4 @@ func TestHandleChatPropagatesRepoError(t *testing.T) {
 	if !errors.Is(err, repoErr) {
 		t.Fatalf("expected repo error to propagate, got %v", err)
 	}
-}
-
-// helper 生成唯一 ID，避免测试间冲突
-func uniqueID(prefix string) string {
-	return prefix + "-" + time.Now().Format("20060102-150405.000000000")
 }
