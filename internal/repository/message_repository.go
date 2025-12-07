@@ -3,12 +3,14 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"go-im/internal/model"
 
 	"github.com/go-sql-driver/mysql"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // MessageRepository 负责消息的持久化。
@@ -31,10 +33,12 @@ func (r *MessageRepository) SaveMessage(ctx context.Context, msg *model.Timeline
 		// 若已有 seq（例如由 Redis 生成），直接尝试写库；否则按会话内最大 seq+1 生成。
 		if msg.Seq == 0 {
 			var maxSeq uint64
-			if err := tx.Raw(
-				"SELECT COALESCE(MAX(seq), 0) FROM timeline_message WHERE conversation_id = ? FOR UPDATE",
-				msg.ConversationID,
-			).Scan(&maxSeq).Error; err != nil {
+			// 使用 FOR UPDATE 锁定会话内行，避免并发冲突；可在上层限制并发或改用 Redis 生成 seq。
+			if err := tx.Model(&model.TimelineMessage{}).
+				Select("COALESCE(MAX(seq), 0)").
+				Where("conversation_id = ?", msg.ConversationID).
+				Clauses(clause.Locking{Strength: "UPDATE"}).
+				Scan(&maxSeq).Error; err != nil {
 				return err
 			}
 			msg.Seq = maxSeq + 1
@@ -43,7 +47,11 @@ func (r *MessageRepository) SaveMessage(ctx context.Context, msg *model.Timeline
 		if err := tx.Create(msg).Error; err != nil {
 			var mysqlErr *mysql.MySQLError
 			if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-				return ErrDuplicateMsgID
+				// 仅在命中 msg_id 唯一键时认定为幂等冲突，其他唯一约束错误向上返回
+				if strings.Contains(strings.ToLower(mysqlErr.Message), "uk_msg_id") {
+					return ErrDuplicateMsgID
+				}
+				return err
 			}
 			return err
 		}
