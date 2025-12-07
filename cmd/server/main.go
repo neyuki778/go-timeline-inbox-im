@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 
 	"go-im/internal/handler"
+	"go-im/internal/infra"
 	"go-im/internal/repository"
 	"go-im/internal/service"
 )
@@ -24,9 +26,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("连接数据库失败: %v", err)
 	}
+	redisClient := infra.NewRedisClient()
+	if err := infra.PingRedis(context.Background(), redisClient); err != nil {
+		log.Printf("Redis 未就绪，将回退 MySQL seq 方案: %v", err)
+		redisClient = nil
+	}
+
 	connManager := service.NewConnectionManager()
 	msgRepo := repository.NewMessageRepository(db)
-	msgSvc := service.NewMessageService(msgRepo)
+	var seqGen service.SeqGenerator
+	if redisClient != nil {
+		seqGen = service.NewRedisSeqGenerator(redisClient, "im:seq:")
+	}
+	msgSvc := service.NewMessageServiceWithSeq(msgRepo, seqGen)
 	wsHandler := handler.NewWebSocketHandler(connManager, msgSvc)
 
 	// 初始化 Gin，引入基础日志与 panic 恢复
