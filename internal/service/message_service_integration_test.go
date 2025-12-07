@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -37,7 +38,10 @@ func TestHandleChatWithRedisSeqAndInboxIntegration(t *testing.T) {
 	svc := NewMessageServiceWithSeq(msgRepo, seqGen).WithInbox(inbox)
 
 	ctx := context.Background()
-	convID := "private_integration_u1_u2"
+	convID := fmt.Sprintf("private_integration_u1_u2_%d", time.Now().UnixNano())
+	// 清理可能残留的数据
+	_ = db.Exec("DELETE FROM timeline_message WHERE conversation_id = ?", convID).Error
+
 	packet := model.InputPacket{Cmd: model.CmdChat, ConversationId: convID, MsgId: ""}
 	payload := ChatPayload{Content: "hello int", MsgType: 1}
 
