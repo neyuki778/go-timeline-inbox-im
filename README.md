@@ -148,7 +148,6 @@ go test -bench=HandleChatSeq -benchmem ./internal/service
 ### 前置要求
 - Go 1.21+
 - Docker & Docker Compose
-- Make（可选）
 
 ### 一键启动
 
