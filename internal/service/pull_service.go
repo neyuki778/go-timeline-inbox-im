@@ -55,6 +55,6 @@ func (s *PullService) PullMessages(ctx context.Context, conversationID string, c
 
 // AckConversation 更新用户在会话的 last_ack_seq。
 func (s *PullService) AckConversation(ctx context.Context, userID, conversationID string, ackSeq int64) error {
-	// TODO: 调用 store.UpsertAck，并确保 ackSeq 回退不覆盖已有较大值（可在仓储或此处处理）
+	// TODO: 调用 store.UpsertAck，并确保 ackSeq 回退不覆盖已有较大值（已在仓储层实现）
 	return s.store.UpsertAck(ctx, userID, conversationID, ackSeq)
 }
