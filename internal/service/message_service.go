@@ -49,8 +49,9 @@ func (s *MessageService) WithInbox(inbox InboxWriter) *MessageService {
 
 // ChatPayload 表示聊天消息的负载体。
 type ChatPayload struct {
-	Content string `json:"content"`
-	MsgType int8   `json:"msg_type"` // 1: 文本，2: 图片
+	Content  string `json:"content"`
+	MsgType  int8   `json:"msg_type"`  // 1: 文本，2: 图片
+	SendTime int64  `json:"send_time"` // 可选：外部指定发送时间（ms）
 }
 
 // HandleChat 保存消息并返回写入后的 seq。
@@ -64,6 +65,11 @@ func (s *MessageService) HandleChat(ctx context.Context, userID string, packet m
 		payload.MsgType = 1
 	}
 
+	sendTime := payload.SendTime
+	if sendTime == 0 {
+		sendTime = time.Now().UnixMilli()
+	}
+
 	msg := &model.TimelineMessage{
 		MsgID:          msg_id,
 		ConversationID: packet.ConversationId,
@@ -71,7 +77,7 @@ func (s *MessageService) HandleChat(ctx context.Context, userID string, packet m
 		Content:        payload.Content,
 		MsgType:        payload.MsgType,
 		Status:         1,
-		SendTime:       time.Now().UnixMilli(),
+		SendTime:       sendTime,
 	}
 
 	// 如果有外部 seq 生成器（这里是 Redis），优先获取 seq 后写库
