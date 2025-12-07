@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 
 	"go-im/internal/handler"
 	"go-im/internal/infra"
@@ -22,23 +21,21 @@ const serverAddr = ":8080"
 
 func main() {
 	// 构建依赖
+	ctx := context.Background()
 	db, err := repository.NewDB()
 	if err != nil {
 		log.Fatalf("连接数据库失败: %v", err)
 	}
 	redisClient := infra.NewRedisClient()
-	if err := infra.PingRedis(context.Background(), redisClient); err != nil {
-		log.Printf("Redis 未就绪，将回退 MySQL seq 方案: %v", err)
-		redisClient = nil
+	if err := infra.PingRedis(ctx, redisClient); err != nil {
+		log.Fatalf("Redis 未就绪，启动失败: %v", err)
 	}
 
 	connManager := service.NewConnectionManager()
 	msgRepo := repository.NewMessageRepository(db)
-	var seqGen service.SeqGenerator
-	if redisClient != nil {
-		seqGen = service.NewRedisSeqGenerator(redisClient, "im:seq:")
-	}
-	msgSvc := service.NewMessageServiceWithSeq(msgRepo, seqGen)
+	seqGen := service.NewRedisSeqGenerator(redisClient, "im:seq:")
+	inbox := service.NewRedisInboxWriter(redisClient, "im:inbox:", 7*24*time.Hour)
+	msgSvc := service.NewMessageServiceWithSeq(msgRepo, seqGen).WithInbox(inbox)
 	wsHandler := handler.NewWebSocketHandler(connManager, msgSvc)
 
 	// 初始化 Gin，引入基础日志与 panic 恢复

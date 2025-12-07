@@ -27,22 +27,22 @@ func (r *MessageRepository) DB() *gorm.DB {
 
 // SaveMessage 在事务中生成会话内 seq 并写入消息记录。
 func (r *MessageRepository) SaveMessage(ctx context.Context, msg *model.TimelineMessage) error {
-	// TODO: 实现会话内 seq 生成与写库逻辑（幂等判重、事务内自增 seq）
-	// return errors.New("SaveMessage not implemented")
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var maxSeq uint64
-		// 查找目前表中最大的seq
-		if err := tx.Raw(
-			"SELECT COALESCE(MAX(seq), 0) FROM timeline_message WHERE conversation_id = ? FOR UPDATE",
-			msg.ConversationID,
-		).Scan(&maxSeq).Error; err != nil{
-			return err
+		// 若已有 seq（例如由 Redis 生成），直接尝试写库；否则按会话内最大 seq+1 生成。
+		if msg.Seq == 0 {
+			var maxSeq uint64
+			if err := tx.Raw(
+				"SELECT COALESCE(MAX(seq), 0) FROM timeline_message WHERE conversation_id = ? FOR UPDATE",
+				msg.ConversationID,
+			).Scan(&maxSeq).Error; err != nil {
+				return err
+			}
+			msg.Seq = maxSeq + 1
 		}
 
-		msg.Seq = maxSeq + 1
-		if err := tx.Create(msg).Error; err != nil{
+		if err := tx.Create(msg).Error; err != nil {
 			var mysqlErr *mysql.MySQLError
-			if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062{
+			if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
 				return ErrDuplicateMsgID
 			}
 			return err
@@ -59,7 +59,7 @@ func (r *MessageRepository) FindByMsgID(ctx context.Context, msgID string) (*mod
 	err := r.db.WithContext(ctx).
 		Where("msg_id = ?", msgID).
 		First(&msg).Error
-	if err != nil{
+	if err != nil {
 		return nil, err
 	}
 	return &msg, nil
