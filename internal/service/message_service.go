@@ -18,6 +18,7 @@ type MessageService struct {
 	msgRepo MessageSaver
 	seqGen  SeqGenerator // 可选的 seq 生成器（例如 Redis），为 nil 时走仓储默认逻辑
 	inbox   InboxWriter  // 可选的 Inbox 写入器（Redis），为 nil 时不写
+	retry   InboxRetryer // 可选的 Inbox 重试器，用于“最终一致”补偿
 }
 
 // MessageSaver 描述消息持久化需要实现的接口，便于测试替换。
@@ -44,6 +45,12 @@ func (s *MessageService) WithSeqGenerator(gen SeqGenerator) *MessageService {
 // WithInbox 可选注入 Inbox 写入器（如 Redis）。
 func (s *MessageService) WithInbox(inbox InboxWriter) *MessageService {
 	s.inbox = inbox
+	return s
+}
+
+// WithInboxRetryer 可选注入 Inbox 重试器（最佳努力），用于 Inbox 写入失败后的补偿。
+func (s *MessageService) WithInboxRetryer(retry InboxRetryer) *MessageService {
+	s.retry = retry
 	return s
 }
 
@@ -98,12 +105,8 @@ func (s *MessageService) HandleChat(ctx context.Context, userID string, packet m
 			if findErr != nil {
 				return model.OutputPacket{Cmd: model.CmdChat, Code: 1, MsgId: msg_id}, findErr
 			}
-			return model.OutputPacket{
-				Cmd:   model.CmdChat,
-				Code:  0,
-				MsgId: msg_id,
-				Seq:   int64(existing.Seq),
-			}, nil
+			// 注意：不能在这里 early return，否则会跳过 Inbox 补偿逻辑（导致 Timeline 有但 Inbox 缺失无法自愈）。
+			msg = existing
 		} else {
 			return model.OutputPacket{Cmd: model.CmdChat, Code: 1, MsgId: msg_id}, err
 		}
@@ -114,7 +117,10 @@ func (s *MessageService) HandleChat(ctx context.Context, userID string, packet m
 		targets := parsePrivateParticipants(packet.ConversationId, userID)
 		if len(targets) > 0 {
 			if err := s.inbox.Append(ctx, *msg, targets); err != nil {
-				log.Printf("写入 Inbox 失败 conv=%s msg_id=%s: %v", packet.ConversationId, msg_id, err)
+				log.Printf("写入 Inbox 失败（将进入补偿队列） conv=%s msg_id=%s: %v", packet.ConversationId, msg_id, err)
+				if s.retry != nil {
+					s.retry.Enqueue(*msg, targets)
+				}
 			}
 		}
 	}
