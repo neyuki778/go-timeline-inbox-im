@@ -43,7 +43,14 @@ func main() {
 	msgRepo := repository.NewMessageRepository(db)
 	seqGen := service.NewRedisSeqGenerator(redisClient, "im:seq:")
 	inbox := service.NewRedisInboxWriter(redisClient, "im:inbox:", 7*24*time.Hour)
-	msgSvc := service.NewMessageServiceWithSeq(msgRepo, seqGen).WithInbox(inbox)
+	retryer := service.NewAsyncInboxRetryer(inbox, service.InboxRetryOptions{
+		QueueSize:   2048,
+		MaxAttempts: 8,
+		BaseBackoff: 200 * time.Millisecond,
+		MaxBackoff:  5 * time.Second,
+		Timeout:     2 * time.Second,
+	})
+	msgSvc := service.NewMessageServiceWithSeq(msgRepo, seqGen).WithInbox(inbox).WithInboxRetryer(retryer)
 
 	// 初始化 RabbitMQ（可通过 IM_USE_RMQ=0 关闭；默认启用，失败直接退出）
 	var producer *service.MessageProducer
@@ -125,6 +132,9 @@ func main() {
 	}
 	if rabbitConn != nil {
 		_ = rabbitConn.Close()
+	}
+	if retryer != nil {
+		retryer.Stop()
 	}
 	log.Println("服务已关闭")
 }
